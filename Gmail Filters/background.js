@@ -1,3 +1,4 @@
+console.log("Background script running...");
 function executeContentScript(tab) {
   chrome.tabs.sendMessage(tab.id, { toggle: true });
 }
