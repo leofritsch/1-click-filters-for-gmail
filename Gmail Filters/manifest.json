@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "1 Click Filters for Gmail",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "description": "Easily add new filter rules in Gmail to clean up your inbox.",
     "permissions": [
         "activeTab"
@@ -19,5 +19,11 @@
     "icons": {
         "48": "postbox_48.png",
         "128": "postbox_128.png"
-    }
+    },
+    "web_accessible_resources": [
+        {
+            "resources": ["explainer.html"],
+            "matches": ["https://mail.google.com/*"]
+        }
+    ]
 }
