@@ -7,6 +7,8 @@ class GmailFilterCreator {
         this.modal = null;
         this.filterButton = null;
         this.isProcessing = false;
+        this.selectionObserver = null;
+        this.navigationObserver = null;
         
         // Initialize the extension
         this.init();
@@ -18,6 +20,7 @@ class GmailFilterCreator {
     init() {
         this.waitForGmailToLoad(() => {
             this.setupSelectionObserver();
+            this.setupNavigationObserver();
             this.addStyles();
         });
     }
@@ -211,14 +214,19 @@ class GmailFilterCreator {
      * Set up observer to watch for email selection changes
      */
     setupSelectionObserver() {
-        const observer = new MutationObserver(() => {
+        // Disconnect existing observer if any
+        if (this.selectionObserver) {
+            this.selectionObserver.disconnect();
+        }
+
+        this.selectionObserver = new MutationObserver(() => {
             this.handleSelectionChange();
         });
 
         // Observe the entire Gmail interface for changes
         const targetNode = document.querySelector('[role="main"]');
         if (targetNode) {
-            observer.observe(targetNode, {
+            this.selectionObserver.observe(targetNode, {
                 childList: true,
                 subtree: true,
                 attributes: true,
@@ -228,6 +236,80 @@ class GmailFilterCreator {
 
         // Initial check
         this.handleSelectionChange();
+    }
+
+    /**
+     * Restart observers after filter creation or Gmail navigation
+     */
+    restartObservers() {
+        setTimeout(() => {
+            console.log('Restarting observers after filter creation...');
+            this.setupSelectionObserver();
+            this.setupNavigationObserver();
+            this.refreshFilterButton();
+        }, 2000); // Wait a bit for Gmail interface to stabilize
+    }
+
+    /**
+     * Set up observer to watch for Gmail navigation changes
+     */
+    setupNavigationObserver() {
+        // Disconnect existing observer if any
+        if (this.navigationObserver) {
+            this.navigationObserver.disconnect();
+        }
+
+        this.navigationObserver = new MutationObserver((mutations) => {
+            // Check for significant interface changes that might require reinitialization
+            let shouldRestart = false;
+            
+            mutations.forEach((mutation) => {
+                // Look for changes that indicate Gmail navigation or interface refresh
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    for (let node of mutation.addedNodes) {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Check for Gmail's main interface containers
+                            if (node.querySelector && (
+                                node.querySelector('[role="main"]') || 
+                                node.querySelector('table[role="grid"]') ||
+                                (node.className && String(node.className).includes('nH'))
+                            )) {
+                                shouldRestart = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (shouldRestart) {
+                console.log('Gmail interface change detected, restarting observers...');
+                this.waitForGmailToLoad(() => {
+                    this.restartObservers();
+                });
+            }
+        });
+
+        // Watch for changes in the document body that might indicate navigation
+        this.navigationObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        // Also listen for URL changes (Gmail uses pushState for navigation)
+        let lastUrl = location.href;
+        new MutationObserver(() => {
+            const url = location.href;
+            if (url !== lastUrl) {
+                lastUrl = url;
+                if (url.includes('mail.google.com')) {
+                    console.log('Gmail URL change detected, restarting observers...');
+                    this.waitForGmailToLoad(() => {
+                        this.restartObservers();
+                    });
+                }
+            }
+        }).observe(document, { subtree: true, childList: true });
     }
 
     /**
@@ -241,6 +323,16 @@ class GmailFilterCreator {
         } else {
             this.hideFilterButton();
         }
+    }
+
+    /**
+     * Force refresh the filter button state (useful after Gmail interface changes)
+     */
+    refreshFilterButton() {
+        this.hideFilterButton();
+        setTimeout(() => {
+            this.handleSelectionChange();
+        }, 100);
     }
 
     /**
@@ -328,6 +420,8 @@ class GmailFilterCreator {
             }, 500);
         } finally {
             this.isProcessing = false;
+            // Re-establish observers after filter creation process completes
+            this.restartObservers();
         }
     }
 
@@ -377,7 +471,7 @@ class GmailFilterCreator {
                     <div class="gmail-filter-status">Preparing to create filter for ${this.selectedEmails.length} sender(s)...</div>
                 </div>
                 <div style="margin-top: 16px;">
-                    <button class="gmail-filter-button" onclick="window.open('${chrome.runtime.getURL('explainer.html')}', '_blank')">
+                    <button class="gmail-filter-button" onclick="window.open('${chrome.runtime.getURL('welcome.html')}', '_blank')">
                         📖 How it works
                     </button>
                 </div>
@@ -691,20 +785,45 @@ class GmailFilterCreator {
 }
 
 // Initialize the Gmail Filter Creator
-let gmailFilterCreator;
+// Prevent multiple initializations when script is injected multiple times
+if (!window.gmailFilterCreator) {
+    let gmailFilterCreator;
 
-// Wait for page load
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        gmailFilterCreator = new GmailFilterCreator();
-    });
-} else {
-    gmailFilterCreator = new GmailFilterCreator();
-}
-
-// Handle messages from background script (for backwards compatibility)
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.toggle && gmailFilterCreator) {
-        gmailFilterCreator.startFilterCreation();
+    /**
+     * Initialize the extension, handling both fresh page loads and script injection
+     */
+    function initializeExtension() {
+        // Check if already initialized
+        if (window.gmailFilterCreator) {
+            console.log('Gmail Filter Creator already initialized');
+            return;
+        }
+        
+        // Mark as initialized to prevent duplicate runs
+        window.gmailFilterCreator = true;
+        
+        try {
+            gmailFilterCreator = new GmailFilterCreator();
+            console.log('Gmail Filter Creator initialized successfully');
+        } catch (error) {
+            console.error('Error initializing Gmail Filter Creator:', error);
+            // Reset flag so it can try again
+            window.gmailFilterCreator = false;
+        }
     }
-});
+
+    // Wait for page load or initialize immediately if already loaded
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeExtension);
+    } else {
+        // Page already loaded, initialize immediately
+        initializeExtension();
+    }
+
+    // Handle messages from background script (for backwards compatibility)
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.toggle && gmailFilterCreator) {
+            gmailFilterCreator.startFilterCreation();
+        }
+    });
+}
